@@ -1,0 +1,234 @@
+#!/usr/bin/env ruby
+# -*- encoding : utf-8 -*-
+
+require 'irb-pager'
+require 'shellwords'
+
+class Commands < Hash
+	class CommandError < Exception
+	end
+	class ExpectingCommandError < CommandError
+		def initialize *args
+			args = ['Command expected']  if args.empty?
+			super *args
+		end
+	end
+	class UnknownCommandError < CommandError
+		def initialize *args
+			args = ['This Command i do not know']  if args.empty?
+			super *args
+		end
+	end
+
+	attr_accessor :exe, :prefix, :default_cmd
+
+	def self.arg_unshift arg, args
+		arg = arg.is_a?(Array) ? arg : [arg]
+		i = 1+args.index {|x|/^[^-]/=~x}
+		args[0...i] + arg + args[i..-1]
+	end
+
+	def self.new prefix, exe
+		r = super()
+		r.exe = exe
+		r.prefix = prefix
+		r.on {|cmd, *argv| raise UnknownCommandError, 'Unknown Command: %s' % cmd }
+		r
+	end
+
+	def on *names, &run
+		if names.empty?
+			@default_cmd = run
+		else
+			names.each {|name| self[name.to_s.to_sym] = run }
+		end
+	end
+
+	def cmd argv
+		if @prefix == @exe
+			raise ExpectingCommandError  if argv.empty?
+			[argv[0].to_sym, *argv[1..-1]]
+		else
+			@exe =~ /^(?:#{Regexp.escape @prefix}-)?(.*)$/
+			[$1.to_sym, *argv]
+		end
+	end
+
+	def each all=nil, &block
+		if not block_given?
+			Enumerator.new self, :each, all
+		elsif all
+			super(&block)
+		else
+			super() {|k,v| yield k,v  unless /^-/ =~ k.to_s }
+		end
+	end
+
+	def run *argv
+		c, *argv = self.cmd( argv)
+		(self[c] || @default_cmd).call c, *argv
+	rescue CommandError
+		STDERR.puts $!.message
+		exit 1
+	end
+	alias call run
+
+	def to_proc
+		method(:call).to_proc
+	end
+end
+
+class RunCave
+	class CommandExpected <Exception
+	end
+	class ResumeFileExpected <Exception
+	end
+
+	attr_accessor :preargs, :cmd, :args
+	attr_reader :dummy, :resumable
+	attr_writer :resume_file
+	def initialize preargs = nil, cmd = nil, args = nil
+		@resume_file, @dummy, @preargs, @cmd, @args = nil, nil, preargs || [], cmd || [], args || []
+	end
+
+	def dummy?()  @dummy  end
+	def dummy!()  @dummy = true; self  end
+	def dummy=( v)  @dummy = !!v; self  end
+
+	def resumable?()  @resumable  end
+	def resumable!()  @resumable = true; self  end
+	def resumable=( v)  @resumable = !!v; self  end
+
+	def prepare_resume_file
+		resumable? ? ['--resume-file', @resume_file || raise(ResumeFileExpected)] : []
+	end
+
+	def prepare
+		raise CommandExpected, "Set #{self}.cmd = yourcommand."  if @cmd.nil? or @cmd.empty?
+		[ :cave, @preargs, @cmd, prepare_resume_file, *@args ].flatten.select{|x|x}.map {|x| x.to_s }
+	end
+
+	def run
+		a = prepare
+		if dummy?
+			puts a.shelljoin
+			0
+		else
+			Kernel.system *a
+			$? ? $?.exitstatus : 130
+		end
+	end
+
+	def this cmd, *args
+		@cmd, @args = cmd, args
+		self
+	end
+	alias method_missing this
+
+	def resume_file f
+		if f.nil?
+			@resume_file
+		else
+			@resume_file = f
+			self
+		end
+	end
+
+	def run_exit
+		exit run
+	end
+	alias call run_exit
+end
+
+def pager *args, &exe
+	if $ttymode
+		IRB::Pager::pager *args, &exe
+	else
+		exe.call
+	end
+end
+
+def pagered exe = nil, &block
+	exe ||= block
+	lambda {|*args| pager { exe.call *args } }
+end
+
+ENV['LESS'] = "-FR #{ENV['LESS']}"
+
+argv0 = $0
+cave = RunCave.new
+cmds = Commands.new 'truckle', File.basename(argv0)
+cmds.on {|*args| cave.this(*args).() }
+
+cmds.on :help, '-h', '--help', &pagered { cmd=cmds.prefix; STDOUT.puts <<EOF }
+Usage
+=====
+
+#{cmd} Command *ARGS
+
+Resumable
+=========
+
+You do not need to set a resume-file. #{cmd} will determine it automaticaly. First, you can give a first argument for tagging. Tag must be numerical!
+
+  #{cmd} 321 resolve netcat6
+	#{cmd} 321 do
+
+If you do not give a tag, #{cmd} will use the actual terminal-device-number. If it isn't possible to determine terminal, the parent-pid will be used.
+
+Like cave but different
+=======================
+
+«resolve» and «remove» will be displayed by a pager, so you can scroll up and down like
+
+  cave -cy resolve WHAT | less -R
+	cave -cy uninstall WHAT | less -R
+
+«install» and «uninstall» are not displayed by a pager, but will execute:
+
+  cave -cy resolve -x
+  cave -cy uninstall -x
+
+«do» and «resume» are special for:
+
+  cave resume
+EOF
+
+cmds.on(:sync)      { cave.sync.() }
+cmds.on :search, :show, &pagered {|*args| cave.this(*args).() }
+cmds.on :resolve,   &pagered {|*args| cave.resumable!.this(*args).() }
+cmds.on 'fix-linkage', &pagered {|*args|
+	cave.resumable!.this *args
+	cave.args.push '--', cave.prepare_resume_file
+	cave.resumable = false
+	cave.()
+}
+cmds.on :remove,    &pagered {|cmd, *args| cave.resumable!.uninstall(*args).() }
+cmds.on :upgrade,   &pagered {|cmd, *args| cave.resumable!.resolve( '-c', :world, *args).() }
+cmds.on(:install)   {|cmd, *argv| cave.resumable!.resolve( '-x', *argv).() }
+cmds.on(:uninstall) {|cmd, *argv| cave.resumable!.uninstall( '-x', *argv).() }
+
+cmds.on(:do, :resume) {|cmd, *args|	cave.resumable!.resume( *args).() }
+
+cmds.on('--list-commands') { puts cmds.map{|k,v|k} }
+cmds.on '--install-commands' do
+	dir, exe = File.split( argv0)
+	cmds.each do |k,v|
+		k = k.to_s
+		k = File.join dir, "#{cmds.prefix}-#{k}"
+		File.symlink exe, k  unless File.exist? k
+	end
+end
+
+cave.dummy!  if %w[1 true yes].include?( ENV['DUMMY'].to_s.downcase)
+$ttymode = STDOUT.tty?
+cave.preargs.push '-cy'  if STDOUT.tty?
+resumefilesuffix = if /^\d+$/ =~ ARGV[0]
+										 "tag-#{ARGV.shift}"
+									 elsif $ttymode and STDIN.tty? and STDOUT.stat.rdev == STDIN.stat.rdev
+										 "dev-#{STDOUT.stat.rdev}"
+									 else
+										 "ppd-#{Process.ppid}"
+									 end
+cave.resume_file = "/tmp/truckle-resume-#{resumefilesuffix}"
+cmds.run *ARGV
