@@ -88,24 +88,47 @@ class RunCave
 	attr_reader :dummy, :resumable
 	attr_writer :resume_file
 	def initialize preargs = nil, cmd = nil, args = nil
-		@resume_file, @dummy, @preargs, @cmd, @args = nil, nil, preargs || [], cmd || [], args || []
+		@resume_file, @preargs, @cmd, @args = nil, preargs || [], cmd || [], args || []
+		@colored = @dummy = @resumable = nil
 	end
 
+	def can_be_dummy
+		@dummy = true  unless false == @dummy
+		self
+	end
 	def dummy?()  @dummy  end
 	def dummy!()  @dummy = true; self  end
-	def dummy=( v)  @dummy = !!v; self  end
+	def dummy=(v)  @dummy = !!v; self  end
 
+	def can_be_resumable
+		@resumable = true  unless false == @resumable
+		self
+	end
 	def resumable?()  @resumable  end
 	def resumable!()  @resumable = true; self  end
-	def resumable=( v)  @resumable = !!v; self  end
+	def resumable=(v)  @resumable = !!v; self  end
+
+	def can_be_colored
+		@colored = true  unless false == @colored
+		self
+	end
+	def colored?()  @colored  end
+	def colored!()  @colored = true; self  end
+	def colored=(v)  @colored = !!v; self  end
 
 	def prepare_resume_file
 		resumable? ? ['--resume-file', @resume_file || raise(ResumeFileExpected)] : []
 	end
 
+	def prepare_colored
+		colored? ? ['--colour', 'yes'] : []
+	end
+
 	def prepare
 		raise CommandExpected, "Set #{self}.cmd = yourcommand."  if @cmd.nil? or @cmd.empty?
-		[ :cave, @preargs, @cmd, prepare_resume_file, *@args ].flatten.select{|x|x}.map {|x| x.to_s }
+		[
+			:cave, prepare_colored, @preargs, @cmd, prepare_resume_file, *@args
+		].flatten.select{|x|x}.map {|x| x.to_s }
 	end
 
 	def run
@@ -141,7 +164,7 @@ class RunCave
 end
 
 def pager *args, &exe
-	if $ttymode
+	if STDOUT.tty?
 		IRB::Pager::pager *args, &exe
 	else
 		exe.call
@@ -160,7 +183,18 @@ cave = RunCave.new
 cmds = Commands.new 'truckle', File.basename(argv0)
 cmds.on {|*args| cave.this(*args).() }
 
-cmds.on :help, '-h', '--help', &pagered { cmd=cmds.prefix; STDOUT.puts <<EOF }
+def markdown_format t, colored = nil
+	t = t.gsub( /^\t+/) {|indent| '  '*indent.length}
+	if colored
+		t.gsub! /^([^\n]+)\n===+/m, "\n«««««« \033[1;4;33m\\1\033[0m »»»»»»"
+		t.gsub! /^([^\n]+)\n---+/m, "\n««« \033[1;33m\\1\033[0m »»»"
+		t.gsub! /`([^`]+)`/, "\033[1;44m \\1 \033[0m"
+	end
+	t = t[1..-1]  while t.start_with? "\n"
+	t
+end
+
+cmds.on :help, '-h', '--help', &pagered { cmd=cmds.prefix; STDOUT.puts markdown_format(<<EOF, cave.colored?) }
 Usage
 =====
 
@@ -171,7 +205,7 @@ Resumable
 
 You do not need to set a resume-file. #{cmd} will determine it automaticaly. First, you can give a first argument for tagging. Tag must be numerical!
 
-  #{cmd} 321 resolve netcat6
+	#{cmd} 321 resolve netcat6
 	#{cmd} 321 do
 
 If you do not give a tag, #{cmd} will use the actual terminal-device-number. If it isn't possible to determine terminal, the parent-pid will be used.
@@ -179,19 +213,37 @@ If you do not give a tag, #{cmd} will use the actual terminal-device-number. If 
 Like cave but different
 =======================
 
-«resolve» and «remove» will be displayed by a pager, so you can scroll up and down like
+Some commands will be displayed by a pager, so you can scroll up and down like
 
-  cave -cy resolve WHAT | less -R
-	cave -cy uninstall WHAT | less -R
+	truckle resolve WHAT    # cave -cy resolve WHAT | less -R
+	truckle remove WHAT     # cave -cy uninstall WHAT | less -R
 
-«install» and «uninstall» are not displayed by a pager, but will execute:
+Some commands are not displayed by a pager, but will execute:
 
-  cave -cy resolve -x
-  cave -cy uninstall -x
+	truckle install WHAT    # cave -cy resolve -x WHAT
+	truckle uninstall WHAT  # cave -cy uninstall -x WHAT
 
-«do» and «resume» are special for:
+«do» and «resume» are special, to execute the last command:
 
-  cave resume
+	truckle resume # | do   # cave resume
+
+Commands
+========
+
+Most commands are like by cave.
+
+- `search` is pagered.
+- `show` is pagered.
+- `resolve` is pagered and resumable. Do _not_ use `-x`! Use `resume`.
+- `install` is resumable and like `cave resolve -x`.
+- `upgrade` is pagered and resumable and like `cave resolve -c world`. Do _not_ use `-x`! Use `resume`.
+- `remove` is pagered, resumable and like `cave uninstall`. Do _not_ use `-x`! Use `resume`.
+- `uninstall` is resumable and like `cave uninstall -x`.
+- `fix-linkage` is pagered and resumable.
+- `do` and `resume` are resumable and will resume or execute the last command.
+
+- `--list-commands` will list all possible commands.
+- `--install-commands` will install all commands as truckle-COMMAND.
 EOF
 
 cmds.on(:sync)      { cave.sync.() }
@@ -221,11 +273,10 @@ cmds.on '--install-commands' do
 end
 
 cave.dummy!  if %w[1 true yes].include?( ENV['DUMMY'].to_s.downcase)
-$ttymode = STDOUT.tty?
-cave.preargs.push '-cy'  if STDOUT.tty?
+cave.can_be_colored  if STDOUT.tty?
 resumefilesuffix = if /^\d+$/ =~ ARGV[0]
 										 "tag-#{ARGV.shift}"
-									 elsif $ttymode and STDIN.tty? and STDOUT.stat.rdev == STDIN.stat.rdev
+									 elsif STDOUT.tty? and STDIN.tty? and STDOUT.stat.rdev == STDIN.stat.rdev
 										 "dev-#{STDOUT.stat.rdev}"
 									 else
 										 "ppd-#{Process.ppid}"
