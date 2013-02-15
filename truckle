@@ -20,7 +20,7 @@ class Commands < Hash
 		end
 	end
 
-	attr_accessor :exe, :prefix, :default_cmd
+	attr_accessor :exe, :prefix, :fallback_cmd
 
 	def self.arg_unshift arg, args
 		arg = arg.is_a?(Array) ? arg : [arg]
@@ -36,11 +36,16 @@ class Commands < Hash
 		r
 	end
 
+	def sym_name name
+		name.to_s.to_sym
+	end
+
 	def on *names, &run
+		options = names.last.is_a?(Hash) ? names.pop.dup : {}
 		if names.empty?
-			@default_cmd = run
+			@fallback_cmd = run
 		else
-			names.each {|name| self[name.to_s.to_sym] = run }
+			names.each {|name| self[sym_name name] = run }
 		end
 	end
 
@@ -66,9 +71,9 @@ class Commands < Hash
 
 	def run *argv
 		c, *argv = self.cmd( argv)
-		(self[c] || @default_cmd).call c, *argv
+		(self[c] || @fallback_cmd).call c, *argv
 	rescue CommandError
-		STDERR.puts $!.message
+		STDERR.puts $!.message, $!.backtrace
 		exit 1
 	end
 	alias call run
@@ -77,6 +82,11 @@ class Commands < Hash
 		method(:call).to_proc
 	end
 end
+
+# RunCave
+# =======
+#
+# Prepare cave-commands.
 
 class RunCave
 	class CommandExpected <Exception
@@ -138,7 +148,7 @@ class RunCave
 			0
 		else
 			Kernel.system *a
-			$? ? $?.exitstatus : 130
+			$? && $?.exitstatus
 		end
 	end
 
@@ -158,43 +168,92 @@ class RunCave
 	end
 
 	def run_exit
-		exit run
+		exit run || 130
 	end
 	alias call run_exit
 end
 
-def pager *args, &exe
-	if STDOUT.tty?
-		IRB::Pager::pager *args, &exe
-	else
-		exe.call
+# Truckle
+# =======
+#
+# cave-wrapper
+
+class Truckle
+	class ExecutionError < Exception
 	end
-end
 
-def pagered exe = nil, &block
-	exe ||= block
-	lambda {|*args| pager { exe.call *args } }
-end
-
-ENV['LESS'] = "-FR #{ENV['LESS']}"
-
-argv0 = $0
-cave = RunCave.new
-cmds = Commands.new 'truckle', File.basename(argv0)
-cmds.on {|*args| cave.this(*args).() }
-
-def markdown_format t, colored = nil
-	t = t.gsub( /^\t+/) {|indent| '  '*indent.length}
-	if colored
-		t.gsub! /^([^\n]+)\n===+/m, "\n«««««« \033[1;4;33m\\1\033[0m »»»»»»"
-		t.gsub! /^([^\n]+)\n---+/m, "\n««« \033[1;33m\\1\033[0m »»»"
-		t.gsub! /`([^`]+)`/, "\033[1;44m \\1 \033[0m"
+	# Calls exe while IRB::Pager redirect output to your PAGER.
+	def pager *args, &exe
+		if @nopager
+			exe.call
+		else
+			IRB::Pager::pager *args, &exe
+		end
 	end
-	t = t[1..-1]  while t.start_with? "\n"
-	t
-end
 
-cmds.on :help, '-h', '--help', &pagered { cmd=cmds.prefix; STDOUT.puts markdown_format(<<EOF, cave.colored?) }
+	# Restarts, if not @nosudo and not root yet, your Truckle as root
+	def sudo *args, &exe
+		if @nosudo or 0 == Process.egid
+			exe.call
+		else
+			exepath = File.join File.dirname( @argv0), @cmds.prefix
+			args = [:sudo, exepath, @params, *args].flatten.select{|x|x}.map {|x| x.to_s }
+			Kernel.exec *args
+			raise ExecutionError, "Can't exec #{args.shelljoin}"
+		end
+	end
+
+	# Your command will be called - if it will be called - with sudo.
+	def sudod exe = nil, &block
+		exe ||= block
+		lambda {|*args| sudo( *args) { exe.call *args } }
+	end
+
+	# Yout command will be called - if it will be called - with pager.
+	def pagered exe = nil, &block
+		exe ||= block
+		lambda {|*args| pager { exe.call *args } }
+	end
+
+	# Yout command will be called - if it will be called - with sudo first and second pager.
+	#
+	#   cmds.on :hamster, &sudo_pagered {|cmd, *args|                puts "Your hamster said: \"#{args.join ' '}\"" }
+	#
+	# It is shorter than:
+	#
+	#   cmds.on( :hamster) {|cmd, *args| sudo( cmd, *args) { pager { puts "Your hamster said: \"#{args.join ' '}\"" } } }
+	def sudo_pagered exe = nil, &block
+		exe ||= block
+		lambda {|*args| sudo( *args) { pager { exe.call *args } } }
+	end
+
+	def markdown_format t, colored = nil
+		t = t.gsub( /^\t+/) {|indent| '  '*indent.length}
+		if colored
+			t.gsub! /^([^\n]+)\n===+/m, "\n«««««« \033[1;4;33m\\1\033[0m »»»»»»"
+			t.gsub! /^([^\n]+)\n---+/m, "\n««« \033[1;33m\\1\033[0m »»»"
+			t.gsub! /`([^`]+)`/, "\033[1;44m \\1 \033[0m"
+		end
+		t = t[1..-1]  while t.start_with? "\n"
+		t
+	end
+
+	def initialize argv0
+		ENV['LESS'] = "-FR #{ENV['LESS']}"
+
+		@argv0 = argv0
+		@exename = File.basename argv0
+
+		# initialize our program.
+		@cave = RunCave.new
+		@cmds = Commands.new 'truckle', @exename
+
+		prepare_commands
+	end
+
+	def helptext
+		cmd = @cmds.prefix
+		markdown_format <<EOF, @cave.colored?
 Usage
 =====
 
@@ -226,6 +285,14 @@ Some commands are not displayed by a pager, but will execute:
 «do» and «resume» are special, to execute the last command:
 
 	truckle resume # | do   # cave resume
+	trdo # | tresume        # shortcuts
+
+Environment
+===========
+
+- `DUMMY=1` will prevent any doing. But it will print, which command would be executed, if not DUMMY=1.
+- `NOSUDO=1` will prevent of using sudo, if you are not root.
+- `PAGER=more` will change the pager to more, instead of less.
 
 Commands
 ========
@@ -245,41 +312,148 @@ Most commands are like by cave.
 - `--list-commands` will list all possible commands.
 - `--install-commands` will install all commands as truckle-COMMAND.
 EOF
+	end
 
-cmds.on(:sync)      { cave.sync.() }
-cmds.on :search, :show, &pagered {|*args| cave.this(*args).() }
-cmds.on :resolve,   &pagered {|*args| cave.resumable!.this(*args).() }
-cmds.on 'fix-linkage', &pagered {|*args|
-	cave.resumable!.this *args
-	cave.args.push '--', cave.prepare_resume_file
-	cave.resumable = false
-	cave.()
-}
-cmds.on :remove,    &pagered {|cmd, *args| cave.resumable!.uninstall(*args).() }
-cmds.on :upgrade,   &pagered {|cmd, *args| cave.resumable!.resolve( '-c', :world, *args).() }
-cmds.on(:install)   {|cmd, *argv| cave.resumable!.resolve( '-x', *argv).() }
-cmds.on(:uninstall) {|cmd, *argv| cave.resumable!.uninstall( '-x', *argv).() }
+	def prepare_commands
+		cmds, cave = @cmds, @cave
 
-cmds.on(:do, :resume) {|cmd, *args|	cave.resumable!.resume( *args).() }
+		# default: simple use cave
+		cmds.on &sudod {|*args| cave.this(*args).() }
 
-cmds.on('--list-commands') { puts cmds.map{|k,v|k} }
-cmds.on '--install-commands' do
-	dir, exe = File.split( argv0)
-	cmds.each do |k,v|
-		k = k.to_s
-		k = File.join dir, "#{cmds.prefix}-#{k}"
-		File.symlink exe, k  unless File.exist? k
+		cmds.on :help, '-h', '--help', &pagered { STDOUT.puts helptext }
+		cmds.on :sync, &sudod { cave.sync.() }
+		cmds.on :search, :show, &sudo_pagered {|*args| cave.this(*args).() }
+		cmds.on :resolve, &sudo_pagered {|*args| cave.resumable!.this(*args).() }
+		cmds.on 'fix-linkage', &sudo_pagered {|*args|
+			cave.resumable!.this *args
+			cave.args.push '--', cave.prepare_resume_file
+			cave.resumable = false
+			cave.()
+		}
+		cmds.on :remove, &sudo_pagered {|cmd, *args| cave.resumable!.uninstall(*args).()}
+		cmds.on :upgrade, &sudo_pagered {|cmd, *args| cave.resumable!.resolve( '-c', :world, *args).() }
+		cmds.on :install, &sudod {|cmd, *argv| cave.resumable!.resolve( '-x', *argv).() }
+		cmds.on :uninstall, &sudod {|cmd, *argv| cave.resumable!.uninstall( '-x', *argv).() }
+
+		cmds.on :do, :resume, &sudod {|cmd, *args| cave.resumable!.resume( *args).() }
+
+		cmds.on '--list-commands', &pagered { puts cmds.map{|k,v|k} }
+		cmds.on '--install-commands', &sudod {
+			dir, exe = File.split( argv0)
+			cmds.each do |k,v|
+				k = k.to_s
+				k = File.join dir, "#{cmds.prefix}-#{k}"
+				File.symlink exe, k  unless File.exist? k
+			end
+		}
+	end
+
+	def setup_params options, argv
+		on_off_auto = lambda do
+			argv.shift
+			case argv[0]
+			when 'on', '1', 'true', 't'   then true
+			when 'off', '0', 'false', 'f' then false
+			end
+		end
+		param = lambda { argv.shift; argv[0] }
+
+		until argv.empty?
+			case opt = argv[0]
+			when '--list-commands', '--install-commands'
+				options[:cmd] = opt
+			when '--dummy'       then options[:dummy] = true
+			when '--resume-file' then options[:resume_file] = param.call
+			when '--tag'         then options[:tag]   = param.call
+			when /^\d+$/         then options[:tag]   = opt
+			when '--pager'       then options[:pager] = on_off_auto.call
+			when '--color'       then options[:color] = on_off_auto.call
+			when '--sudo'        then options[:sudo]  = on_off_auto.call
+			else return
+			end
+			argv.shift
+		end
+	end
+
+	def setup_env options, argv
+		options[:dummy] = true   if %w[1 true yes].include?( ENV['DUMMY'].to_s.downcase)
+		options[:sudo]  = false  if %w[1 true yes].include?( ENV['NOSUDO'].to_s.downcase)
+		options[:tty]   = true   if STDOUT.tty?
+	end
+
+	def setup_run options, argv
+		on_off_auto = lambda {|x| nil == x ? true : x }
+		argv.unshift options[:cmd]  if options[:cmd]
+		@cave.dummy!                if options[:dummy]
+		@cave.can_be_colored        if on_off_auto.( options[:color]) and options[:tty]
+		@nopager = true             unless on_off_auto.( options[:pager]) or options[:tty]
+		@nosudo = true              unless on_off_auto.( options[:sudo])
+
+		resumefilesuffix = if options[:resume_file]
+				options[:resume_file]
+			elsif options[:tag]
+				"tag-#{options[:tag]}"
+			elsif STDOUT.tty? and STDIN.tty? and STDOUT.stat.rdev == STDIN.stat.rdev
+				"dev-#{STDOUT.stat.rdev}"
+			else
+				"ppd-#{Process.ppid}"
+			end
+		@cave.resume_file = options[:resume_file] || "/tmp/truckle-resume-#{resumefilesuffix}"
+	end
+
+	def setup_recall options, argv
+		on_off_auto = lambda {|n,x| case x when true then [n, 'on'] when false then [n, 'off'] end }
+		param = lambda {|n,x| n  if x }
+
+		@params = [
+			param.( '--dummy', options[:dummy]),
+			param.( ['--resume-file', options[:resume_file]], options[:resume_file]),
+			param.( ['--tag', options[:tag]], options[:tag]),
+			on_off_auto.( '--sudo', options[:sudo]),
+			on_off_auto.( '--color', options[:color]),
+			on_off_auto.( '--pager', options[:pager])
+		].flatten.select{|x|x}.map(&:to_s)
+	end
+
+	def run *argv
+		options = {}
+		setup_env options, argv
+		setup_params options, argv
+		setup_recall options, argv
+		setup_run options, argv
+
+		@cmds.run *argv
+	end
+
+	def self.run argv0, *argv
+		self.new( argv0).run *argv
 	end
 end
 
-cave.dummy!  if %w[1 true yes].include?( ENV['DUMMY'].to_s.downcase)
-cave.can_be_colored  if STDOUT.tty?
-resumefilesuffix = if /^\d+$/ =~ ARGV[0]
-										 "tag-#{ARGV.shift}"
-									 elsif STDOUT.tty? and STDIN.tty? and STDOUT.stat.rdev == STDIN.stat.rdev
-										 "dev-#{STDOUT.stat.rdev}"
-									 else
-										 "ppd-#{Process.ppid}"
-									 end
-cave.resume_file = "/tmp/truckle-resume-#{resumefilesuffix}"
-cmds.run *ARGV
+class Shortcut
+	attr_reader :argv0, :argv
+	def initialize argv0, *argv
+		@argv0, @argv = argv0, argv
+	end
+
+	def exec exe, *args
+		exe = File.join File.dirname( @argv0), exe.to_s
+		Kernel.exec exe, *args.flatten.select{|x|x}.map(&:to_s)
+	end
+
+	def run
+		exe = File.basename @argv0
+		case exe.to_sym
+		when :trdo then exec :truckle, :do, *@argv
+		when :tresume then exec :truckle, :resume, *@argv
+		end
+	end
+	alias call run
+
+	def self.run argv0, *argv
+		self.new( argv0, *argv).run
+	end
+end
+
+Shortcut.run $0, *ARGV
+Truckle.run $0, *ARGV
