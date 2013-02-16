@@ -326,14 +326,15 @@ Most commands are like by cave.
 - `uninstall` is resumable and like `cave uninstall -x`.
 - `fix-linkage` is pagered and resumable.
 - `do` and `resume` are resumable and will resume or execute the last command.
+- `retry` are resumable, will resume or execute the last command and will retry the last failed job.
 
 Resumable
 =========
 
 You do not need to set a resume-file. #{cmd} will determine it automaticaly. First, you can give a first argument for tagging. Tag must be numerical!
 
-	#{cmd} 321 resolve netcat6
-	#{cmd} 321 do
+	#{cmd} -t 321 resolve netcat6
+	#{cmd} -t 321 do
 
 If you do not give a tag, #{cmd} will use the actual terminal-device-number. If it isn't possible to determine terminal, the parent-pid will be used.
 
@@ -350,10 +351,12 @@ Some commands are not displayed by a pager, but will execute:
 	truckle install WHAT    # cave -cy resolve -x WHAT
 	truckle uninstall WHAT  # cave -cy uninstall -x WHAT
 
-«do» and «resume» are special, to execute the last command:
+«do», «resume» and «retry» are special, to execute the last command:
 
 	truckle resume # | do   # cave resume
 	trdo # | tresume        # shortcuts
+	truckle retry           # like resume but --retry-failed
+	tretry                  # shortcut
 EOF
 	end
 
@@ -381,6 +384,7 @@ EOF
 		cmds.on :uninstall, &sudod {|cmd, *argv| cave.resumable!.uninstall( '-x', *argv).() }
 
 		cmds.on :do, :resume, &sudod {|cmd, *args| cave.resumable!.resume( *args).() }
+		cmds.on :retry, &sudod {|cmd, *args| cave.resumable!.resume( '--retry-failed', *args).() }
 
 		cmds.on '--list-commands', &pagered { puts cmds.map {|k,v| k } }
 	end
@@ -418,7 +422,6 @@ EOF
 			when '-s' then options[:sudo]  = on_off_auto[arg]
 			else opts.terminate
 			end
-			''
 		end
 		options
 	end
@@ -426,6 +429,7 @@ EOF
 	def setup_env options
 		options[:dummy] = true   if %w[1 true yes].include?( ENV['DUMMY'].to_s.downcase)
 		options[:sudo]  = false  if %w[1 true yes].include?( ENV['NOSUDO'].to_s.downcase)
+		options[:resume_file] = ENV['TRUCKLE_RESUME_FILE']  unless '' == ENV['TRUCKLE_RESUME_FILE'].to_s
 		options[:tty]   = true   if STDOUT.tty?
 	end
 
@@ -438,16 +442,16 @@ EOF
 		@nopager = true             unless on_off_auto.( options[:pager]) or options[:tty]
 		@nosudo = true              unless on_off_auto.( options[:sudo])
 
-		resumefilesuffix = if options[:resume_file]
+		options[:resume_file] = if options[:tag]
+				"/tmp/truckle-resume-tag-#{options[:tag]}"
+			elsif options[:resume_file]
 				options[:resume_file]
-			elsif options[:tag]
-				"tag-#{options[:tag]}"
 			elsif STDOUT.tty? and STDIN.tty? and STDOUT.stat.rdev == STDIN.stat.rdev
-				"dev-#{STDOUT.stat.rdev}"
+				"/tmp/truckle-resume-dev-#{STDOUT.stat.rdev}"
 			else
-				"ppd-#{Process.ppid}"
+				"/tmp/truckle-resume-ppd-#{Process.ppid}"
 			end
-		@cave.resume_file = options[:resume_file] || "/tmp/truckle-resume-#{resumefilesuffix}"
+		@cave.resume_file = options[:resume_file]
 	end
 
 	def setup_recall options
@@ -501,6 +505,7 @@ class Shortcut
 		case exe.to_sym
 		when :trdo then exec :truckle, :do, *ARGV
 		when :tresume then exec :truckle, :resume, *ARGV
+		when :tretry then exec :truckle, :retry, *ARGV
 		end
 	end
 	alias call run
