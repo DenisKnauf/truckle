@@ -201,50 +201,6 @@ class RunCave
 	alias call run_exit
 end
 
-class Opts < Hash
-	class UnknownArgument < Exception
-		def initialize arg
-			super "Unknown argument: #{arg}"
-		end
-	end
-	class ArgumentExpected < Exception
-		def initialize arg
-			super "Argument expected for: #{arg}"
-		end
-	end
-
-	def opt *names, &exe
-		names.each do |name|
-			self[name.to_s.to_sym] = [exe, false]
-		end
-	end
-
-	def opt_arg *names, &exe
-		names.each do |name|
-			self[name.to_s.to_sym] = [exe, true]
-		end
-	end
-
-	def parse *argv
-		get_arg = lambda {|e| argv.shift; e.call argv[0] }
-		argv = argv.dup
-		until argv.empty?
-			opt = argv[0]
-			case opt
-			when /^(?:(-[^-])=?|(--[^=]+)=)(.*)$/
-				opt, arg = $1||$2, $3
-				exe, need_arg = (self[opt] or return( argv))
-				need_arg ? exe( opt, arg) : raise( ArgumentExpected, opt)
-			when /^(?:-[^-]|--[^=]+)$/
-				exe, need_arg = (self[opt] or return( argv))
-				need_arg ? exe( opt, get_arg.()) : exe
-			else
-				return argv
-			end
-		end
-	end
-end
-
 # Truckle
 # =======
 #
@@ -418,7 +374,9 @@ EOF
 			cave.()
 		}
 		cmds.on :remove, &sudo_pagered {|cmd, *args| cave.resumable!.uninstall(*args).()}
-		cmds.on :upgrade, &sudo_pagered {|cmd, *args| cave.resumable!.resolve( '-c', :world, *args).() }
+		cmds.on :upgrade, &sudo_pagered {|cmd, *args|
+			cave.resumable!.resolve( '-c', :world, *args).()
+		}
 		cmds.on :install, &sudod {|cmd, *argv| cave.resumable!.resolve( '-x', *argv).() }
 		cmds.on :uninstall, &sudod {|cmd, *argv| cave.resumable!.uninstall( '-x', *argv).() }
 
@@ -493,7 +451,12 @@ EOF
 	end
 
 	def setup_recall options
-		on_off_auto = lambda {|n,x| case x when true then [n, 'on'] when false then [n, 'off'] end }
+		on_off_auto = lambda {|n,x|
+			case x
+			when true then [n, 'on']
+			when false then [n, 'off']
+			end
+		}
 		param = lambda {|n,x| n  if x }
 
 		@params = [
