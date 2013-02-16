@@ -55,8 +55,8 @@ Resumable
 
 You do not need to set a resume-file. truckle will determine it automaticaly. First, you can give a first argument for tagging. Tag must be numerical!
 
-  truckle 321 resolve netcat6
-  truckle 321 do
+	truckle 321 resolve netcat6
+	truckle 321 do
 
 If you do not give a tag, truckle will use the actual terminal-device-number. If it isn't possible to determine terminal, the parent-pid will be used.
 
@@ -65,15 +65,15 @@ Like cave but different
 
 Some commands will be displayed by a pager, so you can scroll up and down like
 
-  truckle resolve WHAT    # cave -cy resolve WHAT | less -R
-  truckle remove WHAT     # cave -cy uninstall WHAT | less -R
+	truckle resolve WHAT    # cave -cy resolve WHAT | less -R
+	truckle remove WHAT     # cave -cy uninstall WHAT | less -R
 
 Some commands are not displayed by a pager, but will execute:
 
-  truckle install WHAT    # cave -cy resolve -x WHAT
-  truckle uninstall WHAT  # cave -cy uninstall -x WHAT
+	truckle install WHAT    # cave -cy resolve -x WHAT
+	truckle uninstall WHAT  # cave -cy uninstall -x WHAT
 
 «do» and «resume» are special, to execute the last command:
 
-  truckle resume # | do   # cave resume
-  trdo # | tresume        # shortcuts
+	truckle resume # | do   # cave resume
+	trdo # | tresume        # shortcuts

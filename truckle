@@ -285,8 +285,8 @@ class Truckle
 	end
 
 	def markdown_format t, colored = nil
-		t = t.gsub( /^\t+/) {|indent| '  '*indent.length}
 		if colored
+			t = t.gsub( /^\t+/) {|indent| '  '*indent.length}
 			t.gsub! /^([^\n]+)\n===+/m, "\n«««««« \033[1;4;33m\\1\033[0m »»»»»»"
 			t.gsub! /^([^\n]+)\n---+/m, "\n««« \033[1;33m\\1\033[0m »»»"
 			t.gsub! /^  (.*?)( *#.*)$/, "  \033[1;44m\\1\033[0m\\2"
