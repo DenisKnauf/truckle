@@ -11,6 +11,7 @@ all: truckle
 	@echo 'Please run "make install" to install.'
 
 install: truckle
+	mkdir -p $(D)$(BIN_PREFIX)
 	install -m 0755 truckle $(D)$(BIN_PREFIX)/truckle
 	for c in `./truckle --list-commands`; do ln -fs truckle $(D)$(BIN_PREFIX)/truckle-$${c} ; done
 	for c in trdo tresume; do ln -fs truckle $(D)$(BIN_PREFIX)/$${c} ; done
