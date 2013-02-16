@@ -10,7 +10,7 @@ Why did not `cave` provide these things?  It's unclean and it should be clean.  
 Usage
 =====
 
-truckle *PREARGS Command *ARGS
+	truckle *PREARGS Command *ARGS
 
 Arguments
 =========

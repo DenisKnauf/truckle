@@ -316,7 +316,7 @@ class Truckle
 Usage
 =====
 
-#{cmd} *PREARGS Command *ARGS
+	#{cmd} *PREARGS Command *ARGS
 
 Arguments
 =========
