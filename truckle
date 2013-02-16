@@ -16,9 +16,17 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-require 'irb-pager'
 require 'shellwords'
 require 'getoptlong'
+begin
+	require 'irb-pager'
+rescue LoadError
+	STDERR.puts <<EOF
+Loading IRB::Pager failed. Please install it first:
+	sudo gem install irb-pager
+EOF
+	raise
+end
 
 class GetoptLong
 	def argv=( v)  @argv = v  end
