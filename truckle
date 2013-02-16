@@ -3,6 +3,14 @@
 
 require 'irb-pager'
 require 'shellwords'
+require 'getoptlong'
+
+class GetoptLong
+	def argv=( v)  @argv = v  end
+	def argv()  @argv  end
+	def ARGV=( v)  @argv = v  end
+	def ARGV()  @argv  end
+end
 
 class Commands < Hash
 	class CommandError < Exception
@@ -94,7 +102,7 @@ class RunCave
 	class ResumeFileExpected <Exception
 	end
 
-	attr_accessor :preargs, :cmd, :args
+	attr_accessor :preargs, :cmd, :args, :log_level
 	attr_reader :dummy, :resumable
 	attr_writer :resume_file
 	def initialize preargs = nil, cmd = nil, args = nil
@@ -134,10 +142,15 @@ class RunCave
 		colored? ? ['--colour', 'yes'] : []
 	end
 
+	def prepare_log_level
+		@log_level ? ['--log-level', @log_level] : []
+	end
+
 	def prepare
 		raise CommandExpected, "Set #{self}.cmd = yourcommand."  if @cmd.nil? or @cmd.empty?
 		[
-			:cave, prepare_colored, @preargs, @cmd, prepare_resume_file, *@args
+			:cave, prepare_colored, prepare_log_level, @preargs,
+			@cmd, prepare_resume_file, *@args
 		].flatten.select{|x|x}.map {|x| x.to_s }
 	end
 
@@ -171,6 +184,50 @@ class RunCave
 		exit run || 130
 	end
 	alias call run_exit
+end
+
+class Opts < Hash
+	class UnknownArgument < Exception
+		def initialize arg
+			super "Unknown argument: #{arg}"
+		end
+	end
+	class ArgumentExpected < Exception
+		def initialize arg
+			super "Argument expected for: #{arg}"
+		end
+	end
+
+	def opt *names, &exe
+		names.each do |name|
+			self[name.to_s.to_sym] = [exe, false]
+		end
+	end
+
+	def opt_arg *names, &exe
+		names.each do |name|
+			self[name.to_s.to_sym] = [exe, true]
+		end
+	end
+
+	def parse *argv
+		get_arg = lambda {|e| argv.shift; e.call argv[0] }
+		argv = argv.dup
+		until argv.empty?
+			opt = argv[0]
+			case opt
+			when /^(?:(-[^-])=?|(--[^=]+)=)(.*)$/
+				opt, arg = $1||$2, $3
+				exe, need_arg = (self[opt] or return( argv))
+				need_arg ? exe( opt, arg) : raise( ArgumentExpected, opt)
+			when /^(?:-[^-]|--[^=]+)$/
+				exe, need_arg = (self[opt] or return( argv))
+				need_arg ? exe( opt, get_arg.()) : exe
+			else
+				return argv
+			end
+		end
+	end
 end
 
 # Truckle
@@ -232,7 +289,9 @@ class Truckle
 		if colored
 			t.gsub! /^([^\n]+)\n===+/m, "\n«««««« \033[1;4;33m\\1\033[0m »»»»»»"
 			t.gsub! /^([^\n]+)\n---+/m, "\n««« \033[1;33m\\1\033[0m »»»"
+			t.gsub! /^  (.*?)( *#.*)$/, "  \033[1;44m\\1\033[0m\\2"
 			t.gsub! /`([^`]+)`/, "\033[1;44m \\1 \033[0m"
+			t.gsub! /\*([^*]+)\*/, "\033[1m\\1\033[0m"
 		end
 		t = t[1..-1]  while t.start_with? "\n"
 		t
@@ -257,7 +316,45 @@ class Truckle
 Usage
 =====
 
-#{cmd} Command *ARGS
+#{cmd} *PREARGS Command *ARGS
+
+Arguments
+=========
+
+Precede the command, it's possible to set some arguments.
+These Arguments really must precede the command.
+
+- `-C|--list-commands` will list all possible commands and exit.
+- `-h|--help` will print this help and exit.
+- `-n|--dummy` will print the shellcode, which will be executed, if not --dummy.
+- `-s|--sudo on|off|auto` will use (or not) sudo if you are not root.
+- `-c|--color|--colour on|off|auto` will control the colorfull output of `cave`.
+- `-L|--log-level LOGLEVEL` will control the log-level of `cave`.
+- `-p|--pager PAGER` will change the pager to display.
+
+Instead of on|off you can use 0|true or 1|false too.  Default is everytime auto.
+
+Environment
+===========
+
+- `DUMMY=1` will print the shellcode, which will be executed, like `--dummy`.
+- `NOSUDO=1` will prevent of using sudo, if you are not root, like `--sudo off`.
+- `PAGER=more` will change the pager to more, instead of less, like `--pager more`.
+
+Commands
+========
+
+Most commands are like by cave.
+
+- `search` is pagered.
+- `show` is pagered.
+- `resolve` is pagered and resumable. Do *not* use `-x`! Use `resume`.
+- `install` is resumable and like `cave resolve -x`.
+- `upgrade` is pagered and resumable and like `cave resolve -c world`. Do *not* use `-x`! Use `resume`.
+- `remove` is pagered, resumable and like `cave uninstall`. Do *not* use `-x`! Use `resume`.
+- `uninstall` is resumable and like `cave uninstall -x`.
+- `fix-linkage` is pagered and resumable.
+- `do` and `resume` are resumable and will resume or execute the last command.
 
 Resumable
 =========
@@ -286,31 +383,6 @@ Some commands are not displayed by a pager, but will execute:
 
 	truckle resume # | do   # cave resume
 	trdo # | tresume        # shortcuts
-
-Environment
-===========
-
-- `DUMMY=1` will prevent any doing. But it will print, which command would be executed, if not DUMMY=1.
-- `NOSUDO=1` will prevent of using sudo, if you are not root.
-- `PAGER=more` will change the pager to more, instead of less.
-
-Commands
-========
-
-Most commands are like by cave.
-
-- `search` is pagered.
-- `show` is pagered.
-- `resolve` is pagered and resumable. Do _not_ use `-x`! Use `resume`.
-- `install` is resumable and like `cave resolve -x`.
-- `upgrade` is pagered and resumable and like `cave resolve -c world`. Do _not_ use `-x`! Use `resume`.
-- `remove` is pagered, resumable and like `cave uninstall`. Do _not_ use `-x`! Use `resume`.
-- `uninstall` is resumable and like `cave uninstall -x`.
-- `fix-linkage` is pagered and resumable.
-- `do` and `resume` are resumable and will resume or execute the last command.
-
-- `--list-commands` will list all possible commands.
-- `--install-commands` will install all commands as truckle-COMMAND.
 EOF
 	end
 
@@ -337,54 +409,58 @@ EOF
 
 		cmds.on :do, :resume, &sudod {|cmd, *args| cave.resumable!.resume( *args).() }
 
-		cmds.on '--list-commands', &pagered { puts cmds.map{|k,v|k} }
-		cmds.on '--install-commands', &sudod {
-			dir, exe = File.split( argv0)
-			cmds.each do |k,v|
-				k = k.to_s
-				k = File.join dir, "#{cmds.prefix}-#{k}"
-				File.symlink exe, k  unless File.exist? k
-			end
-		}
+		cmds.on '--list-commands', &pagered { puts cmds.map {|k,v| k } }
 	end
 
-	def setup_params options, argv
-		on_off_auto = lambda do
-			argv.shift
-			case argv[0]
+	def setup_params options
+		on_off_auto = lambda do |arg|
+			case arg
 			when 'on', '1', 'true', 't'   then true
 			when 'off', '0', 'false', 'f' then false
 			end
 		end
-		param = lambda { argv.shift; argv[0] }
+		opts = GetoptLong.new(
+			[ '-r', '--resume-file', GetoptLong::REQUIRED_ARGUMENT ],
+			[ '-h', '--help', GetoptLong::NO_ARGUMENT ],
+			[ '-C', '--list-commands', GetoptLong::NO_ARGUMENT ],
+			[ '-n', '--dummy', GetoptLong::NO_ARGUMENT ],
+			[ '-t', '--tag', GetoptLong::REQUIRED_ARGUMENT ],
+			[ '-p', '--pager', GetoptLong::REQUIRED_ARGUMENT ],
+			[ '-c', '--color', '--colour', GetoptLong::REQUIRED_ARGUMENT ],
+			[ '-L', '--log-level', GetoptLong::REQUIRED_ARGUMENT ],
+			[ '-s', '--sudo', GetoptLong::REQUIRED_ARGUMENT ]
+		)
+		opts.ordering = GetoptLong::REQUIRE_ORDER
 
-		until argv.empty?
-			case opt = argv[0]
-			when '--list-commands', '--install-commands'
-				options[:cmd] = opt
-			when '--dummy'       then options[:dummy] = true
-			when '--resume-file' then options[:resume_file] = param.call
-			when '--tag'         then options[:tag]   = param.call
-			when /^\d+$/         then options[:tag]   = opt
-			when '--pager'       then options[:pager] = on_off_auto.call
-			when '--color'       then options[:color] = on_off_auto.call
-			when '--sudo'        then options[:sudo]  = on_off_auto.call
-			else return
+		opts.each do |opt, arg|
+			case opt
+			when '-C' then options[:cmd] = '--list-commands'
+			when '-r' then options[:resume_file] = arg
+			when '-h' then options[:cmd] = 'help'
+			when '-n' then options[:dummy] = true
+			when '-t' then options[:tag]   = arg
+			when '-p' then options[:pager] = on_off_auto[arg]
+			when '-c' then options[:color] = on_off_auto[arg]
+			when '-L' then options[:log_level] = arg
+			when '-s' then options[:sudo]  = on_off_auto[arg]
+			else opts.terminate
 			end
-			argv.shift
+			''
 		end
+		options
 	end
 
-	def setup_env options, argv
+	def setup_env options
 		options[:dummy] = true   if %w[1 true yes].include?( ENV['DUMMY'].to_s.downcase)
 		options[:sudo]  = false  if %w[1 true yes].include?( ENV['NOSUDO'].to_s.downcase)
 		options[:tty]   = true   if STDOUT.tty?
 	end
 
-	def setup_run options, argv
+	def setup_run options
 		on_off_auto = lambda {|x| nil == x ? true : x }
-		argv.unshift options[:cmd]  if options[:cmd]
+		ARGV.unshift options[:cmd]  if options[:cmd]
 		@cave.dummy!                if options[:dummy]
+		@cave.log_level             if options[:log_level]
 		@cave.can_be_colored        if on_off_auto.( options[:color]) and options[:tty]
 		@nopager = true             unless on_off_auto.( options[:pager]) or options[:tty]
 		@nosudo = true              unless on_off_auto.( options[:sudo])
@@ -401,7 +477,7 @@ EOF
 		@cave.resume_file = options[:resume_file] || "/tmp/truckle-resume-#{resumefilesuffix}"
 	end
 
-	def setup_recall options, argv
+	def setup_recall options
 		on_off_auto = lambda {|n,x| case x when true then [n, 'on'] when false then [n, 'off'] end }
 		param = lambda {|n,x| n  if x }
 
@@ -409,31 +485,32 @@ EOF
 			param.( '--dummy', options[:dummy]),
 			param.( ['--resume-file', options[:resume_file]], options[:resume_file]),
 			param.( ['--tag', options[:tag]], options[:tag]),
+			param.( ['--log-level', options[:log_level]], options[:log_level]),
 			on_off_auto.( '--sudo', options[:sudo]),
 			on_off_auto.( '--color', options[:color]),
 			on_off_auto.( '--pager', options[:pager])
 		].flatten.select{|x|x}.map(&:to_s)
 	end
 
-	def run *argv
+	def run
 		options = {}
-		setup_env options, argv
-		setup_params options, argv
-		setup_recall options, argv
-		setup_run options, argv
+		setup_env options
+		setup_params options
+		setup_recall options
+		setup_run options
 
-		@cmds.run *argv
+		@cmds.run *ARGV
 	end
 
-	def self.run argv0, *argv
-		self.new( argv0).run *argv
+	def self.run argv0
+		self.new( argv0).run
 	end
 end
 
 class Shortcut
-	attr_reader :argv0, :argv
-	def initialize argv0, *argv
-		@argv0, @argv = argv0, argv
+	attr_reader :argv0
+	def initialize argv0
+		@argv0 = argv0
 	end
 
 	def exec exe, *args
@@ -444,16 +521,16 @@ class Shortcut
 	def run
 		exe = File.basename @argv0
 		case exe.to_sym
-		when :trdo then exec :truckle, :do, *@argv
-		when :tresume then exec :truckle, :resume, *@argv
+		when :trdo then exec :truckle, :do, *ARGV
+		when :tresume then exec :truckle, :resume, *ARGV
 		end
 	end
 	alias call run
 
-	def self.run argv0, *argv
-		self.new( argv0, *argv).run
+	def self.run argv0
+		self.new( argv0).run
 	end
 end
 
-Shortcut.run $0, *ARGV
-Truckle.run $0, *ARGV
+Shortcut.run $0
+Truckle.run $0
