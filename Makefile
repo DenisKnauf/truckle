@@ -14,7 +14,7 @@ install: truckle
 	mkdir -p $(D)$(BIN_PREFIX)
 	install -m 0755 truckle $(D)$(BIN_PREFIX)/truckle
 	for c in `./truckle --list-commands`; do ln -fs truckle $(D)$(BIN_PREFIX)/truckle-$${c} ; done
-	for c in trdo tresume; do ln -fs truckle $(D)$(BIN_PREFIX)/$${c} ; done
+	for c in trdo tresume tretry; do ln -fs truckle $(D)$(BIN_PREFIX)/$${c} ; done
 
 README.md: truckle README.pre.md
 	( cat README.pre.md ; ./truckle --help ) > README.md.tmp

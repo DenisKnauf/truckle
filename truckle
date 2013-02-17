@@ -277,7 +277,7 @@ class Truckle
 	end
 
 	def initialize argv0
-		ENV['LESS'] = "-FR #{ENV['LESS']}"
+		ENV['LESS'] = "-FLRBb-1 #{ENV['LESS']}"
 
 		@argv0 = argv0
 		@exename = File.basename argv0
@@ -497,10 +497,21 @@ EOF
 	end
 end
 
-class Shortcut
+class Shortcut < Hash
 	attr_reader :argv0
 	def initialize argv0
 		@argv0 = argv0
+		prepare
+	end
+
+	def on cmd, &exe
+		self[cmd.to_s.to_sym] = exe
+	end
+
+	def prepare
+		on( :trdo)    { exec :truckle, :do, *ARGV }
+		on( :tresume) { exec :truckle, :resume, *ARGV }
+		on( :tretry)  { exec :truckle, :retry, *ARGV }
 	end
 
 	def exec exe, *args
@@ -510,11 +521,8 @@ class Shortcut
 
 	def run
 		exe = File.basename @argv0
-		case exe.to_sym
-		when :trdo then exec :truckle, :do, *ARGV
-		when :tresume then exec :truckle, :resume, *ARGV
-		when :tretry then exec :truckle, :retry, *ARGV
-		end
+		exe = self[exe.to_sym]
+		exe.call  if exe
 	end
 	alias call run
 
