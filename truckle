@@ -363,7 +363,7 @@ Some commands are not displayed by a pager, but will execute:
 
 	truckle resume # | do   # cave resume
 	trdo # | tresume        # shortcuts
-	truckle retry           # like resume but --retry-failed
+	truckle retry           # like resume but --retry-failed --retry-skipped
 	tretry                  # shortcut
 EOF
 	end
@@ -392,7 +392,9 @@ EOF
 		cmds.on :uninstall, &sudod {|cmd, *argv| cave.resumable!.uninstall( '-x', *argv).() }
 
 		cmds.on :do, :resume, &sudod {|cmd, *args| cave.resumable!.resume( *args).() }
-		cmds.on :retry, &sudod {|cmd, *args| cave.resumable!.resume( '--retry-failed', *args).() }
+		cmds.on :retry, &sudod {|cmd, *args|
+			cave.resumable!.resume( '--retry-failed', '--retry-skipped', *args).()
+		}
 
 		cmds.on '--list-commands', &pagered { puts cmds.map {|k,v| k } }
 	end
