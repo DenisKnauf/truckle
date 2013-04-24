@@ -376,7 +376,7 @@ EOF
 
 		cmds.on :help, '-h', '--help', &pagered { STDOUT.puts helptext }
 		cmds.on :sync, &sudod { cave.sync.() }
-		cmds.on :search, :show, &sudo_pagered {|*args| cave.this(*args).() }
+		cmds.on :search, :show, 'print-unused-distfiles', &sudo_pagered {|*args| cave.this(*args).() }
 		cmds.on :resolve, &sudo_pagered {|*args| cave.resumable!.this(*args).() }
 		cmds.on 'fix-linkage', &sudo_pagered {|*args|
 			cave.resumable!.this *args
