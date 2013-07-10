@@ -183,8 +183,12 @@ class RunCave
 			puts a.shelljoin
 			0
 		else
-			Kernel.system *a
-			$? && $?.exitstatus
+			begin
+				Kernel.system *a
+				$? && $?.exitstatus
+			rescue Interrupt
+				nil
+			end
 		end
 	end
 
@@ -385,16 +389,12 @@ EOF
 			cave.()
 		}
 		cmds.on :remove, &sudo_pagered {|cmd, *args| cave.resumable!.uninstall(*args).()}
-		cmds.on :upgrade, &sudo_pagered {|cmd, *args|
-			cave.resumable!.resolve( '-c', :world, *args).()
-		}
+		cmds.on :upgrade, &sudo_pagered {|*args| cave.resumable!.this( *args).() }
 		cmds.on :install, &sudod {|cmd, *argv| cave.resumable!.resolve( '-x', *argv).() }
 		cmds.on :uninstall, &sudod {|cmd, *argv| cave.resumable!.uninstall( '-x', *argv).() }
 
 		cmds.on :do, :resume, &sudod {|cmd, *args| cave.resumable!.resume( *args).() }
-		cmds.on :retry, &sudod {|cmd, *args|
-			cave.resumable!.resume( '--retry-failed', '--retry-skipped', *args).()
-		}
+		cmds.on :retry, &sudod {|*args| cave.resumable!.this( *args).() }
 
 		cmds.on '--list-commands', &pagered { puts cmds.map {|k,v| k } }
 	end

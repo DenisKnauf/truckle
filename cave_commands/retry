@@ -1,0 +1,2 @@
+#!/usr/bin/env sh
+exec ${CAVE} resume --retry-failed --retry-skipped "${@}"
