@@ -1,0 +1,37 @@
+#!/usr/bin/env ruby
+
+require 'Paludis'
+require 'getoptlong'
+require 'pathname'
+
+include Paludis
+
+class Object
+	def with &block
+		yield self
+	end
+	def self.with &block
+		yield self
+	end
+end
+
+raise "Name of package expected."  unless ARGV[0]
+
+Log.instance.with do |nst|
+	nst.log_level = LogLevel::Warning
+	nst.program_name = $0
+end
+
+env = EnvironmentFactory.instance.create ''
+found = []
+
+pkg = parse_user_package_dep_spec( ARGV[0], env, []).to_s
+
+env.repositories do |repo|
+	repo.package_ids pkg do |pid|
+		path = pid['EXHERES']
+		found.push Pathname.new( path.parse_value).dirname  if path
+	end
+end
+found.uniq!
+puts found  unless found.empty?

@@ -1,0 +1,183 @@
+#!/usr/bin/env ruby
+
+require 'Paludis'
+require 'getoptlong'
+require 'pathname'
+require 'shellwords'
+begin
+	require 'irb-pager'
+rescue LoadError
+	STDERR.puts <<EOF
+Loading IRB::Pager failed. Please install it first:
+	sudo gem install irb-pager
+EOF
+	raise
+end
+
+include Paludis
+
+class Object
+	def with &block
+		yield self
+	end
+	def self.with &block
+		yield self
+	end
+end
+
+def path_cmd cmd
+	ENV['PATH'].split( ':').each do |dir|
+		dir = Pathname.new dir
+		next  unless dir.directory?
+		dir.each_child {|f| return f  if cmd == f.basename.to_s and f.file? }
+	end
+	nil
+end
+
+def system *a
+	Kernel.system *a.map(&:to_s)
+end
+
+class UsageError <Exception
+end
+
+class NoSelection <UsageError
+	def new x = nil
+		super x || 'Select a file first.'
+	end
+end
+
+if cmd = ENV['ECLECTIC_CONFIG_DIFF_COMMAND']
+	def diff( f1, f2) system "#{cmd} #{Shellwords.escape f1} #{Shellwords.escape f2}" end
+elsif path_cmd 'git'
+	def diff( f1, f2) system *%w[git --no-pager --git-dir=: diff --color-words], f1, f2 end
+elsif path_cmd 'colordiff'
+	def diff( f1, f2) system 'colordiff', f1, f2 end
+else
+	def diff( f1, f2) system 'diff', f1, f2 end
+end
+
+def list_cfgs selected, list
+	keys = {}
+	list.keys.sort.map do |i|
+		file = list[i]
+		keys[["\\#{i}"]] = (selected == file ? '* ' : '')+file.to_s
+	end
+	list_keys keys
+end
+
+Log.instance.with do |nst|
+	nst.log_level = LogLevel::Warning
+	nst.program_name = $0
+end
+
+env = EnvironmentFactory.instance.create ''
+dirs = Pathname.new( env.fetch_repository( 'installed')['location'].parse_value).join( '.cache', 'all_CONFIG_PROTECT').each_line.map {|l| Pathname.new l.chomp }
+
+def find_cfgs dirs, &exe
+	block_given? or return to_enum( __method__, dirs)
+	dirs.each do |dir|
+		dir.find do |e|
+			yield e  if /^\._cfg...._/ =~ e.basename.to_s and e.file?
+		end  if dir.exist?
+	end
+end
+
+def accept_cfg config, update
+	backup = config.dirname + "._cfg_backuped_#{Time.now.strftime '%FT%T'}_#{config.basename}"
+	puts "#{config}: backup to [#{backup}]"
+	config.rename backup
+	puts "#{config}: accept [#{update}]"
+	update.rename config
+end
+
+def reject_cfg config, update
+	backup = config.dirname + "._cfg_rejected_#{Time.now.strftime '%FT%T'}_#{config.basename}"
+	puts "#{config}: reject [#{update}] backup to [#{backup}]"
+	update.rename backup
+end
+
+def list_keys cmds
+	len = cmds.keys.map {|cmd| cmd.map {|c| c.sub /(?<!\\)\\/, '' }.join( ', ').gsub( "\\\\", "\\").length }.max+2
+	cmds.each do |cmd, text|
+		l = cmd.map {|c| c.sub /(?<!\\)\\/, '' }.join( ', ').gsub( "\\\\", "\\").length
+		cmd = cmd.map {|c| c.sub /(?<!\\)\\([^\\])/, "\e[1m\\1\e[0m" }.join( ', ').gsub "\\\\", "\\"
+		printf "  [%s]%s%s\n", cmd, ' '*(len-l), text
+	end
+end
+
+selected = nil
+loop do
+	begin
+		found = Hash.new {|h,k| h[k] = [] }
+		list = {}
+		find_cfgs( dirs).each do |cfg|
+			found[cfg.dirname + cfg.basename.to_s.sub( /^\._cfg...._/, '')] += [cfg]
+		end
+		if found.empty?
+			puts "No files to update."
+			exit 0
+		end
+		found.each_with_index do |(file,cfgs),i|
+			i += 1
+			list[i] = file
+		end
+		selected = nil  unless found[selected]
+		if selected
+			print "(cfg:\e[1m#{selected}\e[0m)# "
+		else
+			puts
+			list_cfgs selected, list
+			puts
+			print "(select?)# "
+		end
+		line = STDIN.gets or exit(0)
+		line = line.chomp.split /\s+/
+		line.each do |x|
+			case x
+			when /^\d+$/
+				m = list[x.to_i]
+				raise UsageError, "Unknown index #{x}"  unless m
+				selected = m
+			when *%w[h help ?]
+				puts
+				list_keys( {
+					%w[\help \?] => 'Help',
+					%w[\1 \2 ...] => 'Select file via index',
+					%w[FILENAME] => 'Select file via filename',
+					%w[\list] => 'List all files need updates',
+					%w[\diff] => 'Displays difference of selected file',
+					%w[\accept \yes] => 'Accepts selected file',
+					%w[\reject \no] => 'Rejects selected file',
+					%w[\quit \exit] => 'Quit',
+				})
+				puts
+			when *%w[d diff]
+				raise NoSelection  unless selected
+				puts
+				IRB::Pager::pager( pager: 'less -R') { diff selected, found[selected][0] }
+				puts
+			when *%w[l list]
+				list_cfgs selected, list  if selected
+			when *%w[a accept y yes]
+				raise NoSelection  unless selected
+				accept_cfg selected, found[selected][0]
+				selected = nil
+			when *%w[r reject n no]
+				raise NoSelection  unless selected
+				reject_cfg selected, found[selected][0]
+				selected = nil
+			when *%w[q quit e exit] then exit(0)
+			else
+				m = Pathname.new x
+				if f = found[m]
+					selected = m
+				else
+					raise UsageError, "Uknown command #{x}"
+				end
+			end
+		end
+	rescue UsageError
+		puts $!
+	end
+end
