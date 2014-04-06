@@ -84,7 +84,8 @@ def find_cfgs dirs, &exe
 end
 
 def accept_cfg config, update
-	backup = config.dirname + "._cfg_backuped_#{Time.now.strftime '%FT%T'}_#{config.basename}"
+	now = Time.now
+	now = Time.at now+1  while (backup = config.dirname + "._cfg_backuped_#{now.strftime '%FT%T'}_#{config.basename}").exist?
 	puts "#{config}: backup to [#{backup}]"
 	config.rename backup
 	puts "#{config}: accept [#{update}]"
@@ -92,16 +93,21 @@ def accept_cfg config, update
 end
 
 def reject_cfg config, update
-	backup = config.dirname + "._cfg_rejected_#{Time.now.strftime '%FT%T'}_#{config.basename}"
+	now = Time.now
+	now = Time.at now+1  while (backup = config.dirname + "._cfg_rejected_#{now.strftime '%FT%T'}_#{config.basename}").exist?
 	puts "#{config}: reject [#{update}] backup to [#{backup}]"
 	update.rename backup
 end
 
 def list_keys cmds
-	len = cmds.keys.map {|cmd| cmd.map {|c| c.sub /(?<!\\)\\/, '' }.join( ', ').gsub( "\\\\", "\\").length }.max+2
+	len = cmds.keys.map do |cmd|
+		cmd.map {|c| c.sub( /(?<!\\)\\/, '').gsub "\\\\", "\\" }.join( ', ').length
+	end.max+2
 	cmds.each do |cmd, text|
-		l = cmd.map {|c| c.sub /(?<!\\)\\/, '' }.join( ', ').gsub( "\\\\", "\\").length
-		cmd = cmd.map {|c| c.sub /(?<!\\)\\([^\\])/, "\e[1m\\1\e[0m" }.join( ', ').gsub "\\\\", "\\"
+		l = cmd.map {|c| c.sub( /(?<!\\)\\/, '').gsub "\\\\", "\\" }.join( ', ').length
+		cmd = cmd.map do |c|
+			c.sub( /(?<!\\)\\([^\\])/, "\e[1m\\1\e[0m").gsub "\\\\", "\\"
+		end.join ', '
 		printf "  [%s]%s%s\n", cmd, ' '*(len-l), text
 	end
 end
@@ -121,6 +127,7 @@ loop do
 		found.each_with_index do |(file,cfgs),i|
 			i += 1
 			list[i] = file
+			cfgs.sort!
 		end
 		selected = nil  unless found[selected]
 		if selected
@@ -132,8 +139,7 @@ loop do
 			print "(select?)# "
 		end
 		line = STDIN.gets or exit(0)
-		line = line.chomp.split /\s+/
-		line.each do |x|
+		line.chomp.split( /\s+/).each do |x|
 			case x
 			when /^\d+$/
 				m = list[x.to_i]
@@ -168,6 +174,15 @@ loop do
 				reject_cfg selected, found[selected][0]
 				selected = nil
 			when *%w[q quit e exit] then exit(0)
+			when 'auto-action'
+				File.readlines '/etc/paludis/config_auto_action' do |line|
+					action, file = line.chomp!.split( "\t", 2)
+					file = Pathname.new file
+					case action
+					when *%w[a accept]
+						accept_cfg nil, nil  if file.exist?
+					end
+				end
 			else
 				m = Pathname.new x
 				if f = found[m]

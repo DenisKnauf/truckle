@@ -396,8 +396,8 @@ EOF
 		cmds.on &s.sudo {|*args| cave.this(*args).() }
 
 		cmds.on :help, '-h', '--help', &s.pager { STDOUT.puts helptext }
-		cmds.on :sync, :config, &s.sudo {|*args| cave.this(*args).() }
-		cmds.on :search, :show, 'print-unused-distfiles', &s.sudo.pager {|*args| cave.this(*args).() }
+		cmds.on :sync, :configs, 'print-package-path', &s.sudo {|*args| cave.this(*args).() }
+		cmds.on :search, :show, :contents, 'print-unused-distfiles', &s.sudo.pager {|*args| cave.this(*args).() }
 		cmds.on :resolve, 'fix-linkage', &s.sudo.pager {|*args| cave.this(*args).() }
 		cmds.on :remove, &s.sudo.pager {|cmd, *args| cave.uninstall(*args).()}
 		cmds.on :upgrade, &s.sudo.pager {|*args| cave.this( *args).() }
