@@ -1,2 +1,2 @@
 #!/usr/bin/env sh
-exec ${CAVE} resolve -c world "${@}"
+exec ${CAVE:-cave} resolve -c world "${@}"
