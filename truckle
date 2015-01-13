@@ -28,24 +28,6 @@ EOF
 	raise
 end
 
-class NamedProc < Proc
-	attr_reader :name
-	def initialize name, &block
-		@name = name.dup
-		@name.freeze
-		super &block
-	end
-	def inspect
-		"#<Proc:#{name} >"
-	end
-end
-
-module Kernel
-	def named_proc name, &block
-		NamedProc.new name, &block
-	end
-end
-
 class GetoptLong
 	def argv=( v)  @argv = v  end
 	def argv()  @argv  end
@@ -90,6 +72,7 @@ class Commands < Hash
 
 	def on *names, &run
 		options = names.last.is_a?(Hash) ? names.pop.dup : {}
+		names = names.flatten.compact
 		if names.empty?
 			@fallback_cmd = run
 		else
@@ -300,6 +283,7 @@ class Truckle
 
 	def initialize argv0
 		ENV['LESS'] = "-FLRBb-1 #{ENV['LESS']}"
+		ENV['CAVE'] ||= 'truckle'
 
 		@argv0 = argv0
 		@exename = File.basename argv0
@@ -364,9 +348,6 @@ Resumable
 
 Resume will be defined via environment `CAVE_*_OPTIONS='--resume-file PATH'`, which is provided by `/etc/profile.d/cave.sh`.
 
-Old resumable-options via truckle will not be provided anymore.
-So, there is no difference between truckle and cave anymore, you can mix it, both will be resumable.
-
 Like cave but different
 =======================
 
@@ -396,9 +377,10 @@ EOF
 		cmds.on &s.sudo {|*args| cave.this(*args).() }
 
 		cmds.on :help, '-h', '--help', &s.pager { STDOUT.puts helptext }
-		cmds.on :sync, :configs, 'print-package-path', &s.sudo {|*args| cave.this(*args).() }
-		cmds.on :search, :show, :contents, 'print-unused-distfiles', &s.sudo.pager {|*args| cave.this(*args).() }
-		cmds.on :resolve, 'fix-linkage', &s.sudo.pager {|*args| cave.this(*args).() }
+		cmds.on *%w[configs print-package-path sync], &s.sudo {|*args| cave.this(*args).() }
+		cmds.on *%w[contents info print-unused-distfiles search show],
+			&s.sudo.pager {|*args| cave.this(*args).() }
+		cmds.on *%w[resolve fix-linkage], &s.sudo.pager {|*args| cave.this(*args).() }
 		cmds.on :remove, &s.sudo.pager {|cmd, *args| cave.uninstall(*args).()}
 		cmds.on :upgrade, &s.sudo.pager {|*args| cave.this( *args).() }
 		cmds.on :install, &s.sudo {|cmd, *argv| cave.resolve( '-x', *argv).() }
