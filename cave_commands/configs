@@ -1,9 +1,13 @@
 #!/usr/bin/env ruby
 
+Main = self
+public
+
 require 'Paludis'
 require 'getoptlong'
 require 'pathname'
 require 'shellwords'
+require 'readline'
 begin
 	require 'irb-pager'
 rescue LoadError
@@ -42,8 +46,8 @@ class UsageError <Exception
 end
 
 class NoSelection <UsageError
-	def new x = nil
-		super x || 'Select a file first.'
+	def initialize x = nil
+		super( x || 'Select a file first.')
 	end
 end
 
@@ -55,15 +59,6 @@ elsif path_cmd 'colordiff'
 	def diff( f1, f2) system 'colordiff', f1, f2 end
 else
 	def diff( f1, f2) system 'diff', f1, f2 end
-end
-
-def list_cfgs selected, list
-	keys = {}
-	list.keys.sort.map do |i|
-		file = list[i]
-		keys[["\\#{i}"]] = (selected == file ? '* ' : '')+file.to_s
-	end
-	list_keys keys
 end
 
 Log.instance.with do |nst|
@@ -112,11 +107,128 @@ def list_keys cmds
 	end
 end
 
-selected = nil
-loop do
-	begin
-		found = Hash.new {|h,k| h[k] = [] }
+def list_cfgs selected, list
+	keys = {}
+	list.keys.sort.map do |i|
+		file = list[i]
+		keys[["\\#{i}"]] = (selected == file ? '* ' : '')+file.to_s
+	end
+	list_keys keys
+end
+
+class Commands < Hash
+	class Builder
+		def initialize cmds
+			@cmds = cmds
+		end
+
+		def self.build cmds, &run
+			r = new cmds
+			r.instance_eval &run
+			r
+		end
+
+		def help text = nil
+			@help = text
+		end
+
+		def on *names, &run
+			options = names.last.is_a?( Hash) ? names.pop.dup : {}
+			names = names.flatten.compact
+			if names.empty?
+				@fallback_cmd = Cmd.new nil, @help, run
+			else
+				cmd = Cmd.new names, @help, &run
+				names.each do |name|
+					name = name.to_s
+					if /\\(.)/ =~ name
+						@cmds[$1.to_sym] = cmd
+						name = name.gsub /\\/, ''
+					end
+					@cmds[name.to_sym] = cmd
+				end
+			end
+		ensure
+			@help = nil
+		end
+	end
+
+	class Cmd <Proc
+		attr_reader :names, :help
+
+		def initialize names, help, &exe
+			@names, @help = names, help
+			super &exe
+		end
+	end
+
+	class CommandError < Exception
+	end
+	class ExpectingCommandError < CommandError
+		def initialize *args
+			args = ['Command expected']  if args.empty?
+			super *args
+		end
+	end
+	class UnknownCommandError < CommandError
+		def initialize *args
+			args = ['This Command i do not know']  if args.empty?
+			super *args
+		end
+	end
+
+	attr_accessor :fallback_cmd
+
+	def self.new &builder
+		r = super()
+		Builder.build r, &builder
+		r
+	end
+
+	def === x
+		include?( x.to_sym) or super
+	end
+
+	def list_keys
+		h = {}
+		self.values.map {|c| h[c.names] = c.help }
+		Main::list_keys( h)
+	end
+end
+
+class FileList
+	attr_reader :found
+	def initialize found
+		@found = found
+	end
+
+	def list
+		return @list  if @list
 		list = {}
+		found.each_with_index do |(file, cfgs), i|
+			i += 1
+			list[i] = file
+			cfgs.sort!
+		end
+		@list = list
+	end
+end
+
+class UI
+	attr_accessor :need_to_print
+	attr_reader :selected, :cmds, :list, :found, :dirs
+	def selected= x
+		@selected, @need_to_print = x, !!x
+	end
+
+	def initialize cmds, dirs
+		@cmds, @dirs = cmds, dirs
+	end
+
+	def prepare
+		@need_to_print = false
+		@found = Hash.new {|h,k| h[k] = [] }
+		@list = {}
 		find_cfgs( dirs).each do |cfg|
 			found[cfg.dirname + cfg.basename.to_s.sub( /^\._cfg...._/, '')] += [cfg]
 		end
@@ -124,75 +236,153 @@ loop do
 			puts "No files to update."
 			exit 0
 		end
-		found.each_with_index do |(file,cfgs),i|
+		found.each_with_index do |(file, cfgs), i|
 			i += 1
 			list[i] = file
 			cfgs.sort!
 		end
-		selected = nil  unless found[selected]
-		if selected
-			print "(cfg:\e[1m#{selected}\e[0m)# "
-		else
-			puts
-			list_cfgs selected, list
-			puts
-			print "(select?)# "
-		end
-		line = STDIN.gets or exit(0)
-		line.chomp.split( /\s+/).each do |x|
-			case x
-			when /^\d+$/
-				m = list[x.to_i]
-				raise UsageError, "Unknown index #{x}"  unless m
-				selected = m
-			when *%w[h help ?]
-				puts
-				list_keys( {
-					%w[\help \?] => 'Help',
-					%w[\1 \2 ...] => 'Select file via index',
-					%w[FILENAME] => 'Select file via filename',
-					%w[\list] => 'List all files need updates',
-					%w[\diff] => 'Displays difference of selected file',
-					%w[\accept \yes] => 'Accepts selected file',
-					%w[\reject \no] => 'Rejects selected file',
-					%w[\quit \exit] => 'Quit',
-				})
-				puts
-			when *%w[d diff]
-				raise NoSelection  unless selected
-				puts
-				IRB::Pager::pager( pager: 'less -R') { diff selected, found[selected][0] }
-				puts
-			when *%w[l list]
-				list_cfgs selected, list  if selected
-			when *%w[a accept y yes]
-				raise NoSelection  unless selected
-				accept_cfg selected, found[selected][0]
-				selected = nil
-			when *%w[r reject n no]
-				raise NoSelection  unless selected
-				reject_cfg selected, found[selected][0]
-				selected = nil
-			when *%w[q quit e exit] then exit(0)
-			when 'auto-action'
-				File.readlines '/etc/paludis/config_auto_action' do |line|
-					action, file = line.chomp!.split( "\t", 2)
-					file = Pathname.new file
-					case action
-					when *%w[a accept]
-						accept_cfg nil, nil  if file.exist?
-					end
-				end
+		self.selected = nil  unless found.has_key? selected
+	end
+
+	def run
+		prepare
+		prompt.chomp.split( /\s+/).each &method( :execute)
+		instance_eval &cmds[:diff]  if need_to_print
+	rescue Interrupt
+	rescue UsageError
+		puts $!.message
+	end
+
+	def prompt
+		prompt = 
+			if selected
+				"(cfg:\e[1m#{selected}\e[0m)# "
 			else
-				m = Pathname.new x
-				if f = found[m]
-					selected = m
-				else
-					raise UsageError, "Uknown command #{x}"
+				puts
+				list_cfgs selected, list
+				puts
+				"(select?)# "
+			end
+		Readline.completion_proc = lambda do |str|
+			reg = /^#{Regexp.quote str}/
+			list.keys.select {|i| reg =~ i.to_s } +
+				found.keys.grep( reg) +
+				cmds.keys.grep( reg) +
+				found.keys.select {|f| reg =~ f.basename.to_s }
+		end
+		line = Readline.readline( prompt, true) or exit
+		Readline::HISTORY.pop  if /^\s*$/ =~ line or (Readline::HISTORY.length >= 2 && Readline::HISTORY[-2] == line)
+		line
+	end
+
+	def execute x
+		case x
+		when /^\d+$/
+			m = list[x.to_i]
+			raise UsageError, "Unknown index #{x}"  unless m
+			self.selected = m
+		when cmds
+			instance_eval &cmds[x.to_sym]
+		else
+			m = Pathname.new x
+			unless (f = found[m]).empty?
+				self.selected = m
+			else
+				raise UsageError, "Unknown command #{x}"
+			end
+		end
+	end
+end
+
+auto_action_file = Pathname.new '/etc/paludis/configs_auto_action'
+
+cmds = Commands.new do
+	help 'Help'
+	on %w[\help \?] do
+		puts
+		cmds.list_keys
+		puts
+	end
+
+	help 'Displays difference of selected file'
+	on '\diff' do
+		raise NoSelection  unless selected
+		puts
+		IRB::Pager::pager( pager: 'less -R') { diff selected, found[selected][0] }
+		puts
+		self.need_to_print = false
+	end
+
+	help 'List all files need updates'
+	on '\list' do
+		list_cfgs selected, list  if selected
+	end
+
+	help 'Accepts selected file'
+	on %w[\accept \yes] do
+		raise NoSelection  unless selected
+		accept_cfg selected, found[selected][0]
+		selected = nil
+	end
+
+	help 'Rejects selected file'
+	on %w[\reject \no] do
+		raise NoSelection  unless selected
+		reject_cfg selected, found[selected][0]
+		selected = nil
+	end
+
+	help 'Quit'
+	on %w[\quit \exit] do
+		exit 0
+	end
+
+	on 'auto-action' do
+		unless auto_action_file.exist?
+			raise UsageError, "No config for auto-action found: #{auto_action_file}"
+		end
+		auto_action_file.each_line do |line|
+			next  if /^\s*#/ =~ line
+			action, file = line.chomp!.split( "\t", 2)
+			file = Pathname.new file
+			if found.has_key? file
+				case action
+				when *%w[a accept]
+					accept_cfg file, found[file][-1]
+					found[file][0...-1].each {|f| reject_cfg file, f }
+				when *%w[r reject]
+					found[file].each {|f| reject_cfg file, f }
 				end
 			end
 		end
-	rescue UsageError
-		puts $!
 	end
 end
+
+ui = UI.new cmds, dirs
+
+opts = GetoptLong.new(
+	[ '-h', '--help', GetoptLong::NO_ARGUMENT ],
+	[ '-A', '--auto-action', GetoptLong::OPTIONAL_ARGUMENT ]
+)
+opts.ordering = GetoptLong::REQUIRE_ORDER
+opts.each do |opt, arg|
+	case opt
+	when '-h'
+		puts <<EOF
+Usage: #{ENV['cave']||'cave'} #{File.basename $0} [-h] [-A]
+
+Without options, interactive user interface will be started
+Options:
+  -A, --auto-action[=file]  runs automatical actions from file or #{auto_action_file}
+
+EOF
+		exit
+	when '-A'
+		auto_action_file = Pathname.new arg  if arg and not arg.empty?
+		ui.prepare
+		ui.execute 'auto-action'
+		exit
+	end
+end
+
+loop { ui.run }
