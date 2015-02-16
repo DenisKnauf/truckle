@@ -216,12 +216,13 @@ end
 
 class UI
 	attr_accessor :need_to_print
-	attr_reader :selected, :cmds, :list, :found, :dirs
+	attr_reader :selected, :cmds, :list, :found, :dirs, :ignore_list
 	def selected= x
 		@selected, @need_to_print = x, !!x
 	end
 
 	def initialize cmds, dirs
+		@ignore_list = []
 		@cmds, @dirs = cmds, dirs
 	end
 
@@ -230,7 +231,9 @@ class UI
 		@found = Hash.new {|h,k| h[k] = [] }
 		@list = {}
 		find_cfgs( dirs).each do |cfg|
-			found[cfg.dirname + cfg.basename.to_s.sub( /^\._cfg...._/, '')] += [cfg]
+			conf = cfg.dirname + cfg.basename.to_s.sub( /^\._cfg...._/, '')
+			next  if ignore_list.include? conf
+			found[conf] += [cfg]
 		end
 		if found.empty?
 			puts "No files to update."
@@ -330,6 +333,14 @@ cmds = Commands.new do
 		raise NoSelection  unless selected
 		reject_cfg selected, found[selected][0]
 		selected = nil
+	end
+
+	help 'Ignore selected file for this session (do not anything with this file)'
+	on %w[\later \ignore] do
+		raise NoSelection unless  selected
+		ignore_list.push selected
+		self.need_to_print = false
+		self.selected = nil
 	end
 
 	help 'Quit'
