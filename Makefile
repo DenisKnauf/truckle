@@ -4,7 +4,7 @@ NULL=0  exec make "CALL=$0" "EXE=`which $0`" -f "`which $0`" -- "$@"
 
 PREFIX := /usr/local
 BIN_PREFIX := $(PREFIX)/bin
-CAVE_COMMANDS_PREFIX := /usr/libexec/cave/commands
+CAVE_COMMANDS_PREFIX := $(PREFIX)/libexec/cave/commands
 SYS_CONF_DIR := /etc
 PROFILE_DIR := $(SYS_CONF_DIR)/profile.d
 SUDOERS_DIR := $(SYS_CONF_DIR)/sudoers.d
