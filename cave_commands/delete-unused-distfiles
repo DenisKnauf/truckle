@@ -1,3 +1,0 @@
-#!/usr/bin/env sh
-
-cave print-unused-distfiles | xargs -r rm --
